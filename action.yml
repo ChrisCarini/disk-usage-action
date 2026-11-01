@@ -1,0 +1,7 @@
+name: Monitor disk usage
+description: Sample workspace filesystem usage every five seconds and report the peak after the job.
+runs:
+  using: node24
+  main: index.js
+  post: post.js
+  post-if: always()
