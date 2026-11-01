@@ -166,7 +166,7 @@ for (const missingWorkspace of [false, true]) {
         assert.match(stdout, /Disk usage samples/);
         const result = fs.readFileSync(summary, 'utf8');
         assert.match(result, /Peak observed used space/);
-        assert.match(result, /
+        assert.match(result, /```mermaid\n[\s\S]+?\nxychart\n/);
         assert.equal([...result.matchAll(/    line \[\d/g)].length, 2);
         assert.ok(stdout.includes(result));
         assert.ok(fs.readFileSync(path.join(directory, 'samples.jsonl'), 'utf8').trim().split('\n').length >= 3);
