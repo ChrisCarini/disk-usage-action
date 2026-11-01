@@ -31,6 +31,7 @@ Version `v0.0.1` targets Linux runners. It uses the Node 24 action runtime provi
 
 The automatic **Post Monitor disk usage** step stops the sampler and publishes a job summary containing:
 
+- A Mermaid XY chart of used and available space over the job
 - Filesystem capacity
 - Starting free space
 - Peak observed used space
@@ -38,6 +39,12 @@ The automatic **Post Monitor disk usage** step stops the sampler and publishes a
 - Maximum net drop in free space from the initial sample
 
 The summary uses GiB. Timestamped raw samples appear in the post-step logs in KiB.
+
+The chart uses a blue line for used space and an orange line for available space, with sample number on the x-axis. Samples are taken every five seconds, plus a final sample when the post-job step stops monitoring. If only one sample is recorded, labeled bars compare used and available space instead.
+
+For jobs with more than 60 samples, the chart groups observations into 60 evenly spaced sample windows and shows the highest used and lowest available space in each window, so brief observed peaks are not lost. Those two values can come from different samples within the same window. The numeric table always uses every sample.
+
+The chart is emitted as a fenced `mermaid` block using `xychart-beta`; it requires a summary viewer with Mermaid XY chart support. Viewers without that support may show the chart source instead. The numeric table and raw logs remain available regardless of chart rendering. Chart generation uses only the existing samples, with no extra dependencies, permissions, or external chart service.
 
 Because reporting runs in a post-job hook, sampling also covers the post-job work of actions registered after this action, such as Gradle cache handling. The hook is configured to run even when later build steps fail.
 

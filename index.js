@@ -4,6 +4,8 @@ const { execFileSync, spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { setTimeout: delay } = require('node:timers/promises');
 
+const gib = kib => (kib / 1024 / 1024).toFixed(2);
+
 function sample() {
   const output = execFileSync('df', ['-Pk', process.env.GITHUB_WORKSPACE], { encoding: 'utf8' });
   const values = output.trim().split('\n')[1]?.trim().split(/\s+/).slice(1, 4).map(Number);
@@ -14,6 +16,55 @@ function sample() {
   return { time: new Date().toISOString(), total, used, available };
 }
 
+function renderChart(samples) {
+  const points = Array.from({ length: Math.min(samples.length, 60) }, () => ({
+    used: 0,
+    available: Infinity,
+  }));
+  for (const [index, entry] of samples.entries()) {
+    // Group around evenly spaced sample positions without losing brief peaks.
+    const point = points[Math.round(index * (points.length - 1) / Math.max(1, samples.length - 1))];
+    point.used = Math.max(point.used, entry.used);
+    point.available = Math.min(point.available, entry.available);
+  }
+  const capacity = samples.reduce((maximum, entry) => Math.max(maximum, entry.total), 0);
+  const singleSample = samples.length === 1;
+  const xAxis = singleSample
+    ? '"Space" ["Used", "Available"]'
+    : `"Sample number (5-second sampling)" 1 --> ${samples.length}`;
+  const plots = singleSample
+    ? [`    bar [${gib(points[0].used)}, ${gib(points[0].available)}]`]
+    : [
+      `    line [${points.map(point => gib(point.used)).join(', ')}]`,
+      `    line [${points.map(point => gib(point.available)).join(', ')}]`,
+    ];
+  return [
+    '### Disk usage over time',
+    '',
+    '```mermaid',
+    '---',
+    'config:',
+    '  themeVariables:',
+    '    xyChart:',
+    '      plotColorPalette: "#3b82f6, #d97706"',
+    '---',
+    'xychart-beta',
+    '    title "Workspace filesystem usage"',
+    `    x-axis ${xAxis}`,
+    `    y-axis "GiB" 0 --> ${Math.max(1, Math.ceil(capacity / 1024 / 1024))}`,
+    ...plots,
+    '```',
+    '',
+    singleSample
+      ? 'Only one sample was recorded; the bars compare used and available space.'
+      : '**Blue line:** used space. **Orange line:** available space.',
+    samples.length > points.length
+      ? `The chart groups ${samples.length} samples into ${points.length} evenly spaced sample windows, showing peak used and minimum available space in each window. The table below uses every sample.`
+      : 'Sampling includes a final post-job sample.',
+    '',
+  ].join('\n');
+}
+
 function summarize(samples) {
   if (samples.length === 0) {
     throw new Error('No disk usage samples were recorded.');
@@ -21,10 +72,10 @@ function summarize(samples) {
   const first = samples[0];
   const peak = samples.reduce((a, b) => a.used >= b.used ? a : b);
   const minimum = samples.reduce((a, b) => a.available <= b.available ? a : b);
-  const gib = kib => (kib / 1024 / 1024).toFixed(2);
   return [
     '## Disk usage (5-second samples)',
     '',
+    renderChart(samples),
     '| Measurement | GiB |',
     '|---|---:|',
     `| Filesystem capacity | ${gib(first.total)} |`,

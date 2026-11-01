@@ -1,5 +1,5 @@
 name: Monitor disk usage
-description: Sample workspace filesystem usage every five seconds and report the peak after the job.
+description: Sample workspace filesystem usage every five seconds and report the peak and a usage chart after the job.
 runs:
   using: node24
   main: index.js
