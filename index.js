@@ -48,7 +48,7 @@ function renderChart(samples) {
     '    xyChart:',
     '      plotColorPalette: "#3b82f6, #d97706"',
     '---',
-    'xychart-beta',
+    'xychart',
     '    title "Workspace filesystem usage"',
     `    x-axis ${xAxis}`,
     `    y-axis "GiB" 0 --> ${Math.max(1, Math.ceil(capacity / 1024 / 1024))}`,
