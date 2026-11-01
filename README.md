@@ -69,6 +69,16 @@ node --test index.test.js
 
 CI uses Node 24 and runs the local action itself to exercise its main and post-job entrypoints on a GitHub-hosted runner.
 
+The `Test` workflow also runs a separate **Disk usage graph (30-second rise and fall)** job on pull requests, pushes to `main`, and manual runs. It exercises the real main and post entrypoints while holding temporary file allocations at **0, 2, 4, 2, and 0 GiB** for six seconds each. `fallocate` reserves real disk blocks rather than creating sparse files, and the files are removed even if the test fails.
+
+The test requires a sample in every phase, at least a 1 GiB change in the expected direction for both used and available space at every transition, and chart values matching all recorded samples. The job summary includes the expected timing and the actual chart for visual inspection in viewers with Mermaid support.
+
+Run this integration test locally on Linux with `fallocate` and at least 6 GiB of free workspace disk space (4 GiB maximum allocation plus 2 GiB of headroom):
+
+```bash
+node --test disk-usage-graph.test.js
+```
+
 ## License
 
 [Apache-2.0](LICENSE).

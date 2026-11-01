@@ -27,3 +27,19 @@ jobs:
 
       - name: Run tests
         run: node --test index.test.js
+
+  graph:
+    name: Disk usage graph (30-second rise and fall)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+
+      - name: Exercise and verify disk usage graph
+        run: node --test disk-usage-graph.test.js
