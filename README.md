@@ -44,7 +44,7 @@ The chart uses a blue line for used space and an orange line for available space
 
 For jobs with more than 60 samples, the chart groups observations into 60 evenly spaced sample windows and shows the highest used and lowest available space in each window, so brief observed peaks are not lost. Those two values can come from different samples within the same window. The numeric table always uses every sample.
 
-The chart is emitted as a fenced `mermaid` block using `xychart-beta`; it requires a summary viewer with Mermaid XY chart support. Viewers without that support may show the chart source instead. The numeric table and raw logs remain available regardless of chart rendering. Chart generation uses only the existing samples, with no extra dependencies, permissions, or external chart service.
+The chart is emitted as a fenced `mermaid` block using `xychart`; it requires a summary viewer with Mermaid XY chart support. Viewers without that support may show the chart source instead. The numeric table and raw logs remain available regardless of chart rendering. Chart generation uses only the existing samples, with no extra dependencies, permissions, or external chart service.
 
 Because reporting runs in a post-job hook, sampling also covers the post-job work of actions registered after this action, such as Gradle cache handling. The hook is configured to run even when later build steps fail.
 
