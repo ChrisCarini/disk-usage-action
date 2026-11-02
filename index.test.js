@@ -10,24 +10,195 @@ const { summarize } = require('./index.js');
 
 const run = promisify(execFile);
 const gib = 1024 * 1024;
+const sampleTime = index => new Date(Date.UTC(2026, 10, 1, 23, 59, 50) + index * 5000).toISOString();
 
 test('reports a transient peak rather than just the final disk usage', () => {
   const result = summarize([
-    { time: 'start', total: 100 * gib, used: 40 * gib, available: 60 * gib },
-    { time: 'peak', total: 100 * gib, used: 75 * gib, available: 25 * gib },
-    { time: 'end', total: 100 * gib, used: 50 * gib, available: 50 * gib },
+    { time: sampleTime(0), total: 100 * gib, used: 40 * gib, available: 60 * gib },
+    { time: sampleTime(1), total: 100 * gib, used: 75 * gib, available: 25 * gib },
+    { time: sampleTime(2), total: 100 * gib, used: 50 * gib, available: 50 * gib },
   ]);
   assert.match(result, /Peak observed used space \| 75\.00/);
   assert.match(result, /Minimum observed free space \| 25\.00/);
   assert.match(result, /Maximum net drop in free space from start \| 35\.00/);
-  assert.match(result, /Lowest free space observed at peak/);
+  assert.ok(result.includes(`Lowest free space observed at ${sampleTime(1)}`));
+});
+
+test('includes a Mermaid XY chart with UTC timestamps, elapsed seconds, and auto-scaled GiB values', () => {
+  const result = summarize([
+    { time: sampleTime(0), total: 100 * gib, used: 40 * gib, available: 60 * gib },
+    { time: sampleTime(1), total: 100 * gib, used: 75 * gib, available: 25 * gib },
+    { time: sampleTime(2), total: 100 * gib, used: 50 * gib, available: 50 * gib },
+  ]);
+  assert.ok(result.includes([
+    'xychart',
+    '    title "Workspace filesystem usage"',
+    `    x-axis "UTC time (seconds since first sample)" ["${sampleTime(0)} (0s)","${sampleTime(1)} (5s)","${sampleTime(2)} (10s)"]`,
+    '    y-axis "GiB" 22.50 --> 77.50',
+    '    line [40.00, 75.00, 50.00]',
+    '    line [60.00, 25.00, 50.00]',
+    '```',
+  ].join('\n')));
+  assert.match(result, /```mermaid\n---\nconfig:\n  themeVariables:\n    xyChart:\n      plotColorPalette: "#3b82f6, #d97706"\n/);
+  assert.match(result, /\n  xyChart:\n    width: 700\n    height: 600\n    xAxis:\n      labelFontSize: 12\n      labelRotation: 90\n---\n/);
+  assert.match(result, /\*\*Blue line:\*\* used space\. \*\*Orange line:\*\* available space\./);
+  assert.match(result, /Sampling includes a final post-job sample/);
+  assert.doesNotMatch(result, /chart groups|Sample number/);
+});
+
+test('keeps sub-second and next-day timestamps distinct for log correlation', () => {
+  const times = [
+    '2026-11-01T23:59:59.100Z',
+    '2026-11-01T23:59:59.250Z',
+    '2026-11-02T23:59:59.100Z',
+  ];
+  const result = summarize(times.map(time => ({ time, total: 140 * gib, used: 55 * gib, available: 85 * gib })));
+  const labels = result.match(/x-axis "UTC time \(seconds since first sample\)" (\[[^\n]+\])/);
+  assert.ok(labels);
+  assert.deepEqual(JSON.parse(labels[1]), [`${times[0]} (0s)`, `${times[1]} (0s)`, `${times[2]} (86400s)`]);
+});
+
+test('derives elapsed seconds from recorded timestamps rather than assuming five-second intervals', () => {
+  const times = [
+    '2026-11-01T16:27:00.000Z',
+    '2026-11-01T16:27:05.010Z',
+    '2026-11-01T16:27:07.450Z',
+  ];
+  const result = summarize(times.map(time => ({ time, total: 140 * gib, used: 55 * gib, available: 85 * gib })));
+  const labels = result.match(/x-axis "UTC time \(seconds since first sample\)" (\[[^\n]+\])/);
+  assert.ok(labels);
+  assert.deepEqual(JSON.parse(labels[1]), [`${times[0]} (0s)`, `${times[1]} (5s)`, `${times[2]} (7s)`]);
+});
+
+for (const invalidIndex of [0, 1]) {
+  test(`rejects an invalid timestamp at sample ${invalidIndex} instead of emitting NaN elapsed seconds`, () => {
+    const samples = [0, 1].map(index => ({
+      time: sampleTime(index), total: 140 * gib, used: 55 * gib, available: 85 * gib,
+    }));
+    samples[invalidIndex].time = 'invalid';
+    assert.throws(() => summarize(samples), /Invalid disk usage sample timestamp: invalid/);
+  });
+}
+
+test('retains a zero baseline for a single-sample bar chart with large values', () => {
+  const result = summarize([{ time: sampleTime(0), total: 140 * gib, used: 55 * gib, available: 85 * gib }]);
+  assert.match(result, /y-axis "GiB" 0\.00 --> 89\.25/);
+});
+
+test('fits the plotted 55-85 GiB range instead of the 140 GiB filesystem capacity', () => {
+  const result = summarize([
+    { time: sampleTime(0), total: 140 * gib, used: 55 * gib, available: 85 * gib },
+    { time: sampleTime(1), total: 140 * gib, used: 60 * gib, available: 80 * gib },
+  ]);
+  assert.match(result, /y-axis "GiB" 53\.50 --> 86\.50/);
+  assert.match(result, /Filesystem capacity \| 140\.00/);
+});
+
+for (const { used, available, bounds } of [
+  { used: 55, available: 55, bounds: '54.99 --> 55.01' },
+  { used: 0, available: 0, bounds: '0.00 --> 0.01' },
+  { used: 0.02, available: 0.03, bounds: '0.01 --> 0.04' },
+]) {
+  test(`keeps a padded, nonnegative y-axis for ${used}/${available} GiB lines`, () => {
+    const result = summarize([0, 1].map(index => ({
+      time: sampleTime(index), total: 140 * gib, used: used * gib, available: available * gib,
+    })));
+    assert.ok(result.includes(`y-axis "GiB" ${bounds}`));
+    assert.doesNotMatch(result, /NaN|Infinity/);
+  });
+}
+
+test('scales to plotted window extremes rather than unplotted raw values', () => {
+  const samples = Array.from({ length: 121 }, (_, index) => ({
+    time: sampleTime(index), total: 140 * gib, used: 55 * gib, available: 85 * gib,
+  }));
+  samples[0].used = 0;
+  samples[0].available = 140 * gib;
+  const result = summarize(samples);
+  assert.match(result, /y-axis "GiB" 53\.50 --> 86\.50/);
+});
+
+test('renders a single sample as labeled bars without a zero-width numeric axis', () => {
+  const result = summarize([
+    { time: sampleTime(0), total: 0.5 * gib, used: 0.125 * gib, available: 0.375 * gib },
+  ]);
+  assert.match(result, /x-axis "Space" \["Used", "Available"\]/);
+  assert.match(result, /y-axis "GiB" 0\.00 --> 0\.40/);
+  assert.match(result, /bar \[0\.13, 0\.38\]/);
+  assert.match(result, /Only one sample was recorded/);
+  assert.doesNotMatch(result, /    line|Blue line|Orange line|labelRotation/);
+  assert.doesNotMatch(result, /NaN|Infinity/);
+});
+
+test('keeps filesystem capacity in the table without using it as the chart limit', () => {
+  const result = summarize([
+    { time: sampleTime(0), total: 100 * gib, used: 40 * gib, available: 60 * gib },
+    { time: sampleTime(1), total: 150.25 * gib, used: 110 * gib, available: 40.25 * gib },
+  ]);
+  assert.match(result, /y-axis "GiB" 36\.50 --> 113\.50/);
+  assert.match(result, /Filesystem capacity \| 100\.00/);
+});
+
+for (const count of [60, 61, 4321, 120961]) {
+  test(`bounds a ${count}-sample chart while preserving every window's extremes`, () => {
+    const samples = Array.from({ length: count }, (_, index) => ({
+      time: sampleTime(index),
+      total: 100 * gib,
+      used: 40 * gib,
+      available: 60 * gib,
+    }));
+    samples[0].used = 10 * gib;
+    samples[0].available = 90 * gib;
+    samples[17].used = 95 * gib;
+    samples[23].available = 2 * gib;
+    samples[count - 1].used = 45 * gib;
+    samples[count - 1].available = 55 * gib;
+    const result = summarize(samples);
+    const lines = [...result.matchAll(/    line \[([^\]]+)\]/g)];
+    assert.equal(lines.length, 2);
+    const used = lines[0][1].split(', ').map(Number);
+    const available = lines[1][1].split(', ').map(Number);
+    assert.equal(used.length, 60);
+    assert.equal(available.length, 60);
+    const labels = result.match(/x-axis "UTC time \(seconds since first sample\)" (\[[^\n]+\])/);
+    assert.ok(labels);
+    const timestamps = JSON.parse(labels[1]);
+    assert.equal(timestamps.length, 60);
+    assert.match(result, /width: 1400/);
+    for (let point = 0; point < 60; point++) {
+      const start = Math.max(0, Math.ceil((point - 0.5) * (count - 1) / 59));
+      const end = point === 59 ? count : Math.ceil((point + 0.5) * (count - 1) / 59);
+      const window = samples.slice(start, end);
+      assert.equal(used[point], Math.max(...window.map(entry => entry.used / gib)));
+      assert.equal(available[point], Math.min(...window.map(entry => entry.available / gib)));
+      assert.equal(timestamps[point], `${window.at(-1).time} (${(end - 1) * 5}s)`);
+    }
+    assert.equal(Math.max(...used), 95);
+    assert.equal(Math.min(...available), 2);
+    assert.match(result, /Peak observed used space \| 95\.00/);
+    assert.match(result, /Minimum observed free space \| 2\.00/);
+    assert.match(result, /Maximum net drop in free space from start \| 88\.00/);
+    assert.ok(result.includes(`Lowest free space observed at ${sampleTime(23)}`));
+    assert.ok(Buffer.byteLength(result) < 5000, 'even a week-long job should produce a small summary');
+    assert.doesNotMatch(result, /NaN|Infinity/);
+    if (count > 60) {
+      assert.match(result, new RegExp(`chart groups ${count} samples into 60 evenly spaced sample windows`));
+      assert.match(result, /Each x-axis timestamp marks the last sample in its window/);
+    } else {
+      assert.doesNotMatch(result, /chart groups/);
+    }
+  });
+}
+
+test('rejects an empty sample set', () => {
+  assert.throws(() => summarize([]), /No disk usage samples were recorded/);
 });
 
 test('cleanup does not produce a negative free-space drop or erase an earlier peak', () => {
   const result = summarize([
-    { time: 'start', total: 100 * gib, used: 60 * gib, available: 40 * gib },
-    { time: 'cleaned', total: 100 * gib, used: 35 * gib, available: 65 * gib },
-    { time: 'end', total: 100 * gib, used: 50 * gib, available: 50 * gib },
+    { time: sampleTime(0), total: 100 * gib, used: 60 * gib, available: 40 * gib },
+    { time: sampleTime(1), total: 100 * gib, used: 35 * gib, available: 65 * gib },
+    { time: sampleTime(2), total: 100 * gib, used: 50 * gib, available: 50 * gib },
   ]);
   assert.match(result, /Peak observed used space \| 60\.00/);
   assert.match(result, /Minimum observed free space \| 40\.00/);
@@ -74,7 +245,11 @@ for (const missingWorkspace of [false, true]) {
       } else {
         const { stdout } = await post;
         assert.match(stdout, /Disk usage samples/);
-        assert.match(fs.readFileSync(summary, 'utf8'), /Peak observed used space/);
+        const result = fs.readFileSync(summary, 'utf8');
+        assert.match(result, /Peak observed used space/);
+        assert.match(result, /```mermaid\n[\s\S]+?\nxychart\n/);
+        assert.equal([...result.matchAll(/    line \[\d/g)].length, 2);
+        assert.ok(stdout.includes(result));
         assert.ok(fs.readFileSync(path.join(directory, 'samples.jsonl'), 'utf8').trim().split('\n').length >= 3);
       }
       assert.ok(fs.existsSync(path.join(directory, 'stopped')));
