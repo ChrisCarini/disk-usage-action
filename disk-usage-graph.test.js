@@ -65,9 +65,9 @@ test('charts real disk usage rising and falling over 30 seconds', { timeout: 900
         'Expected test-file usage: **0 -> 2 -> 4 -> 2 -> 0 GiB**, holding each level for six seconds.',
         'The chart below is the real post-action report and includes other workspace filesystem activity.',
         '',
-        '| Elapsed seconds | Test files (GiB) |',
-        '|---|---:|',
-        ...phases.map(phase => `| ${((phase.start - start) / 1000).toFixed(1)}-${((phase.end - start) / 1000).toFixed(1)} | ${phase.allocated} |`),
+        '| Elapsed seconds | UTC phase start | Test files (GiB) |',
+        '|---|---|---:|',
+        ...phases.map(phase => `| ${((phase.start - start) / 1000).toFixed(1)}-${((phase.end - start) / 1000).toFixed(1)} | ${new Date(phase.start).toISOString()} | ${phase.allocated} |`),
         '',
         result,
       ].join('\n'));
@@ -101,6 +101,22 @@ test('charts real disk usage rising and falling over 30 seconds', { timeout: 900
         samples.map(entry => Number((entry[field] / kibPerGib).toFixed(2))),
         `The ${field} chart line must preserve the measured rise and fall.`);
     }
+    const timestamps = result.match(/^    x-axis "UTC time \(seconds since first sample\)" (\[[^\n]+\])$/m);
+    assert.ok(timestamps, 'The x-axis must show UTC timestamps and elapsed seconds.');
+    const firstTime = Date.parse(samples[0].time);
+    assert.deepEqual(JSON.parse(timestamps[1]), samples.map(entry =>
+      `${entry.time} (${Math.round((Date.parse(entry.time) - firstTime) / 1000)}s)`),
+      'Every x-axis label must contain its raw timestamp and elapsed seconds from the first sample.');
+    const bounds = result.match(/^    y-axis "GiB" ([\d.]+) --> ([\d.]+)$/m);
+    assert.ok(bounds, 'The y-axis must have numeric limits.');
+    const values = lines.flatMap(line => line[1].split(', ').map(Number));
+    const minimum = Math.min(...values);
+    const maximum = Math.max(...values);
+    const tolerance = Math.max(0.01, (maximum - minimum) * 0.05) + 0.010001;
+    assert.ok(Number(bounds[1]) <= minimum && minimum - Number(bounds[1]) <= tolerance,
+      'The lower limit must fit the plotted minimum with only a small margin.');
+    assert.ok(Number(bounds[2]) >= maximum && Number(bounds[2]) - maximum <= tolerance,
+      'The upper limit must fit the plotted maximum with only a small margin.');
     assert.ok(fs.existsSync(path.join(directory, 'stopped')), 'The post action must stop the sampler.');
   } finally {
     for (const file of files) fs.rmSync(file, { force: true });

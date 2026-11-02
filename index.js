@@ -6,6 +6,12 @@ const { setTimeout: delay } = require('node:timers/promises');
 
 const gib = kib => (kib / 1024 / 1024).toFixed(2);
 
+function parseSampleTime(time) {
+  const milliseconds = Date.parse(time);
+  if (!Number.isFinite(milliseconds)) throw new Error(`Invalid disk usage sample timestamp: ${time}`);
+  return milliseconds;
+}
+
 function sample() {
   const output = execFileSync('df', ['-Pk', process.env.GITHUB_WORKSPACE], { encoding: 'utf8' });
   const values = output.trim().split('\n')[1]?.trim().split(/\s+/).slice(1, 4).map(Number);
@@ -18,25 +24,37 @@ function sample() {
 
 function renderChart(samples) {
   const points = Array.from({ length: Math.min(samples.length, 60) }, () => ({
+    time: null,
     used: 0,
     available: Infinity,
   }));
   for (const [index, entry] of samples.entries()) {
     // Group around evenly spaced sample positions without losing brief peaks.
     const point = points[Math.round(index * (points.length - 1) / Math.max(1, samples.length - 1))];
+    point.time = entry.time;
     point.used = Math.max(point.used, entry.used);
     point.available = Math.min(point.available, entry.available);
   }
-  const capacity = samples.reduce((maximum, entry) => Math.max(maximum, entry.total), 0);
   const singleSample = samples.length === 1;
+  const used = points.map(point => gib(point.used));
+  const available = points.map(point => gib(point.available));
+  // Work in the chart's 0.01 GiB units so rounding cannot clip a plotted value.
+  const values = [...used, ...available].map(value => Math.round(Number(value) * 100));
+  const minimum = singleSample ? 0 : Math.min(...values);
+  const maximum = Math.max(...values);
+  const padding = Math.max(1, Math.ceil((maximum - minimum) * 0.05));
+  const lower = (Math.max(0, minimum - padding) / 100).toFixed(2);
+  const upper = ((maximum + padding) / 100).toFixed(2);
+  const start = parseSampleTime(samples[0].time);
   const xAxis = singleSample
     ? '"Space" ["Used", "Available"]'
-    : `"Sample number (5-second sampling)" 1 --> ${samples.length}`;
+    : `"UTC time (seconds since first sample)" ${JSON.stringify(points.map(point =>
+      `${point.time} (${Math.round((parseSampleTime(point.time) - start) / 1000)}s)`))}`;
   const plots = singleSample
-    ? [`    bar [${gib(points[0].used)}, ${gib(points[0].available)}]`]
+    ? [`    bar [${used[0]}, ${available[0]}]`]
     : [
-      `    line [${points.map(point => gib(point.used)).join(', ')}]`,
-      `    line [${points.map(point => gib(point.available)).join(', ')}]`,
+      `    line [${used.join(', ')}]`,
+      `    line [${available.join(', ')}]`,
     ];
   return [
     '### Disk usage over time',
@@ -47,19 +65,27 @@ function renderChart(samples) {
     '  themeVariables:',
     '    xyChart:',
     '      plotColorPalette: "#3b82f6, #d97706"',
+    ...(singleSample ? [] : [
+      '  xyChart:',
+      `    width: ${Math.max(700, points.length * 20 + 200)}`,
+      '    height: 600',
+      '    xAxis:',
+      '      labelFontSize: 12',
+      '      labelRotation: 90',
+    ]),
     '---',
     'xychart',
     '    title "Workspace filesystem usage"',
     `    x-axis ${xAxis}`,
-    `    y-axis "GiB" 0 --> ${Math.max(1, Math.ceil(capacity / 1024 / 1024))}`,
+    `    y-axis "GiB" ${lower} --> ${upper}`,
     ...plots,
     '```',
     '',
     singleSample
       ? 'Only one sample was recorded; the bars compare used and available space.'
-      : '**Blue line:** used space. **Orange line:** available space.',
+      : '**Blue line:** used space. **Orange line:** available space. The y-axis auto-scales to the plotted range.',
     samples.length > points.length
-      ? `The chart groups ${samples.length} samples into ${points.length} evenly spaced sample windows, showing peak used and minimum available space in each window. The table below uses every sample.`
+      ? `The chart groups ${samples.length} samples into ${points.length} evenly spaced sample windows, showing peak used and minimum available space in each window. Each x-axis timestamp marks the last sample in its window. The table below uses every sample.`
       : 'Sampling includes a final post-job sample.',
     '',
   ].join('\n');
